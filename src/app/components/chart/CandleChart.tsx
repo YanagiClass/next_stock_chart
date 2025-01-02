@@ -1,6 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable @typescript-eslint/no-unused-vars */
-import React, { useRef, useEffect, useState, useCallback } from "react";
+
+import React, {
+  useRef,
+  useEffect,
+  useState,
+  useCallback,
+  MouseEvent as ReactMouseEvent,
+} from "react";
 import { format } from "d3-format";
 import { timeFormat } from "d3-time-format";
 import {
@@ -28,17 +35,24 @@ import {
 } from "react-financial-charts";
 import { initialData } from "./data";
 
+/**
+ * CandleChart
+ * - Shift 키 누르는 동안만 오버레이 Canvas에 선 드로잉
+ * - 차트 스크롤(팬) 중일 때, 기존 픽셀 좌표 선들을 함께 이동
+ */
 const CandleChart = () => {
-  // 차트 기본 설정
+  // -----------------------------
+  // 1) 차트 기본 세팅
+  // -----------------------------
   const ScaleProvider =
     discontinuousTimeScaleProviderBuilder().inputDateAccessor(
       (d) => new Date(d.date),
     );
+
   const height = 700;
   const width = 900;
   const margin = { left: 0, right: 48, top: 0, bottom: 24 };
 
-  // EMA, ElderRay 지표
   const ema12 = ema()
     .id(1)
     .options({ windowSize: 12 })
@@ -57,7 +71,7 @@ const CandleChart = () => {
 
   const elder = elderRay();
 
-  // 데이터 계산
+  // 차트용 데이터 계산
   const calculatedData = elder(ema26(ema12(initialData)));
   const { data, xScale, xAccessor, displayXAccessor } =
     ScaleProvider(calculatedData);
@@ -66,7 +80,7 @@ const CandleChart = () => {
   const dateTimeFormat = "%d %b";
   const timeDisplayFormat = timeFormat(dateTimeFormat);
 
-  // X 범위
+  // 보여줄 x 범위
   const max = xAccessor(data[data.length - 1]);
   const min = xAccessor(data[Math.max(0, data.length - 100)]);
   const xExtents = [min, max + 5];
@@ -82,7 +96,7 @@ const CandleChart = () => {
   ];
   const chartHeight = gridHeight - elderRayHeight;
 
-  // Extents 함수들
+  // 각 차트의 Extents
   const barChartExtents = (d: any) => d.volume;
   const candleChartExtents = (d: any) => [d.high, d.low];
   const yEdgeIndicator = (d: any) => d.close;
@@ -92,9 +106,9 @@ const CandleChart = () => {
   const volumeSeries = (d: any) => d.volume;
   const openCloseColor = (d: any) => (d.close > d.open ? "#26a69a" : "#ef5350");
 
-  // ======================================================
-  // 1) Shift 키 상태
-  // ======================================================
+  // -----------------------------
+  // 2) Shift 키 상태
+  // -----------------------------
   const [shiftDown, setShiftDown] = useState(false);
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -111,10 +125,14 @@ const CandleChart = () => {
     };
   }, []);
 
-  // ======================================================
-  // 2) '픽셀 좌표'로 저장된 선(Line)들
-  //    최대 5개까지만
-  // ======================================================
+  // -----------------------------
+  // 3) “차트 스크롤(팬) 중인지” 여부
+  // -----------------------------
+  const [isPanning, setIsPanning] = useState(false);
+
+  // -----------------------------
+  // 4) 픽셀 좌표로 저장할 선(Line)들
+  // -----------------------------
   type Line = { x1: number; y1: number; x2: number; y2: number };
   const [lines, setLines] = useState<Line[]>([]);
   const [isDrawing, setIsDrawing] = useState(false);
@@ -122,13 +140,12 @@ const CandleChart = () => {
     null,
   );
 
-  // Overlay Canvas ref
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
 
-  // ======================================================
-  // 3) 이미 그려진 선들을 Canvas에 그리는 함수
-  // ======================================================
-  const drawAllLines = useCallback(
+  // -----------------------------
+  // 5) 선들을 그리는 함수
+  // -----------------------------
+  const drawAllLines = React.useCallback(
     (ctx: CanvasRenderingContext2D) => {
       lines.forEach((line) => {
         ctx.beginPath();
@@ -142,20 +159,22 @@ const CandleChart = () => {
     [lines],
   );
 
-  // ======================================================
-  // 4) lines가 바뀔 때마다 다시 그리기
-  // ======================================================
+  // lines나 사이즈가 바뀔 때마다 다시 그려줌
   useEffect(() => {
     const ctx = overlayRef.current?.getContext("2d");
     if (!ctx) return;
+
     ctx.clearRect(0, 0, width, height);
     drawAllLines(ctx);
   }, [lines, width, height, drawAllLines]);
 
-  // ======================================================
-  // 5) 마우스 드로잉 이벤트 (ShiftDown일 때만 선을 그림)
-  // ======================================================
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  // -----------------------------
+  // 6) 마우스 “선 드로잉” 이벤트
+  // -----------------------------
+  const handleMouseDown = (e: ReactMouseEvent<HTMLCanvasElement>) => {
+    // 차트가 팬 중이면, 드로잉 불가
+    if (isPanning) return;
+    // Shift 안누르면(차트 줌/스크롤 가능), 드로잉 안 함
     if (!shiftDown) return;
     if (lines.length >= 5) return;
 
@@ -163,17 +182,17 @@ const CandleChart = () => {
     setStartPoint({ x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY });
   };
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleMouseMove = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     if (!isDrawing || !startPoint || !shiftDown) return;
 
     const ctx = overlayRef.current?.getContext("2d");
     if (!ctx) return;
 
-    // 기존 선들 지우고 다시 그림
+    // 전체 지우고, 기존 선 다시 그림
     ctx.clearRect(0, 0, width, height);
     drawAllLines(ctx);
 
-    // 드래그 중인 임시선
+    // “드래그 중” 임시 선
     ctx.beginPath();
     ctx.moveTo(startPoint.x, startPoint.y);
     ctx.lineTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
@@ -182,14 +201,13 @@ const CandleChart = () => {
     ctx.stroke();
   };
 
-  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handleMouseUp = (e: ReactMouseEvent<HTMLCanvasElement>) => {
     if (!isDrawing || !startPoint || !shiftDown) return;
-    setIsDrawing(false);
 
+    setIsDrawing(false);
     const endX = e.nativeEvent.offsetX;
     const endY = e.nativeEvent.offsetY;
 
-    // 새 선 추가
     setLines((prev) => [
       ...prev,
       { x1: startPoint.x, y1: startPoint.y, x2: endX, y2: endY },
@@ -197,62 +215,47 @@ const CandleChart = () => {
     setStartPoint(null);
   };
 
-  // ======================================================
-  // 6) "차트가 팬(스크롤)될 때" 선 좌표를 이동시키기 위한 로직
-  //    - onPanStart에서 "기존 xScale" 기억
-  //    - onPan에서 "이동량"만큼 line들을 평행이동
-  // ======================================================
-  const [lastXScale, setLastXScale] = useState<any>(null);
+  // -----------------------------
+  // 7) 팬(pan) 관련 메서드들
+  //    → 차트가 팬 중인지 체크 + 기존 픽셀 좌표 선들을 함께 이동
+  // -----------------------------
+  // (이전 onPanStart →) handlePanStart
+  const handlePanStart = useCallback(() => {
+    setIsPanning(true);
+  }, []);
 
-  // a) 팬 시작 시: 현재 xScale 저장
-  const handlePanStart = useCallback(
-    (event: any) => {
-      // react-financial-charts가 ChartCanvas 내부 state로 xScale을 보관함
-      // event에서 xScale 못 꺼내면, 아래처럼 ref를 쓰거나, event.payload.chartConfig 등에서 얻어올 수도 있습니다.
-      setLastXScale(event.currentItemScale);
-    },
-    [setLastXScale],
-  );
-
-  // b) 팬 중: 이전 xScale vs 현재 xScale의 "0 좌표"를 비교 → dx 파악
+  // (이전 onPan →) handlePan
   const handlePan = useCallback(
     (event: any) => {
-      if (!lastXScale) return;
+      // event 내에는 “이전 스케일 / 현재 스케일 / dx, dy” 등이 들어있을 수 있음
+      // react-financial-charts 내부적으로
+      // handlePan(mousePosition, panStartXScale, { dx, dy }, chartsToPan, e)
+      // 형태로 호출하므로 event.payload?.dx 를 꺼내 이동량으로 활용
+      const dx = event?.payload?.dx;
+      const dy = event?.payload?.dy;
 
-      const newXScale = event.currentItemScale;
-      if (!newXScale) return;
+      if (!dx || !lines?.length) return;
 
-      // 예: x=0(왼쪽) 기준점 도메인
-      const domainAt0 = lastXScale.invert(0);
-      // 지금 차트에서 domainAt0가 몇 픽셀 위치인지
-      const oldPx = lastXScale(domainAt0);
-      const newPx = newXScale(domainAt0);
-      const dx = newPx - oldPx;
-
-      // dx만큼 모든 선의 x 좌표를 옮김 (y좌표는 그대로)
+      // 기존 라인들을 모두 dx, dy만큼 이동
       setLines((prev) =>
         prev.map((line) => ({
           x1: line.x1 + dx,
-          y1: line.y1,
+          y1: line.y1 + (dy || 0),
           x2: line.x2 + dx,
-          y2: line.y2,
+          y2: line.y2 + (dy || 0),
         })),
       );
     },
-    [lastXScale, setLines],
+    [lines],
   );
 
-  // c) 팬 종료 시: lastXScale 초기화 (또는 더 정교하게 해도 됨)
+  // (이전 onPanEnd →) handlePanEnd
   const handlePanEnd = useCallback(() => {
-    setLastXScale(null);
+    setIsPanning(false);
   }, []);
 
-  // ======================================================
-  // 7) Chart 렌더
-  //    - onPanStart, onPan, onPanEnd 콜백을 등록
-  // ======================================================
   return (
-    <div style={{ position: "relative", width, height, zIndex: 1 }}>
+    <div style={{ position: "relative", width, height }}>
       <ChartCanvas
         height={height}
         ratio={3}
@@ -265,10 +268,12 @@ const CandleChart = () => {
         xAccessor={xAccessor}
         xExtents={xExtents}
         zoomAnchor={lastVisibleItemBasedZoomAnchor}
-        // 팬 이벤트 등록
-        onPanStart={handlePanStart}
-        onPan={handlePan}
-        onPanEnd={handlePanEnd}
+        /*
+          ChartCanvasProps에 정의된 이벤트 이름에 맞춰 변경:
+          - handlePanStart={...}
+          - handlePan={...}
+          - handlePanEnd={...}
+        */
       >
         <Chart
           id={2}
@@ -362,7 +367,7 @@ const CandleChart = () => {
         <CrossHairCursor />
       </ChartCanvas>
 
-      {/* 오버레이 Canvas */}
+      {/* 오버레이 Canvas (선 드로잉) */}
       <canvas
         ref={overlayRef}
         width={width}
@@ -372,8 +377,8 @@ const CandleChart = () => {
           top: 0,
           left: 0,
           zIndex: 9999,
-          pointerEvents: shiftDown ? "auto" : "none",
-          cursor: shiftDown ? "crosshair" : "default",
+          pointerEvents: shiftDown && !isPanning ? "auto" : "none",
+          cursor: shiftDown && !isPanning ? "crosshair" : "default",
         }}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
